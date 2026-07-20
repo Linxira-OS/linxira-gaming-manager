@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Linxira Gaming Manager
+Comment=Manage game libraries, compatibility tools, and backups
+Exec=linxira-gaming-manager
+Icon=applications-games
+Terminal=false
+Type=Application
+Categories=Game;Utility;

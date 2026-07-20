@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.linxira.GamingManager</id>
+  <name>Linxira Gaming Manager</name>
+  <summary>Manage game libraries, compatibility tools, and backups</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">org.linxira.GamingManager.desktop</launchable>
+  <description><p>A user-level game library and compatibility workspace for Linxira OS.</p></description>
+</component>
