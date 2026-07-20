@@ -7,7 +7,7 @@ name = "linxira-gaming-manager"
 version = "0.1.0"
 description = "User-level game library and compatibility manager for Linxira OS"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 dependencies = ["PySide6", "vdf"]
 
 [project.scripts]

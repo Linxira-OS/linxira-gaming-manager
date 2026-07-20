@@ -6,5 +6,13 @@
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <launchable type="desktop-id">org.linxira.GamingManager.desktop</launchable>
-  <description><p>A user-level game library and compatibility workspace for Linxira OS.</p></description>
+  <description>
+    <p>Linxira Gaming Manager discovers Steam libraries and imported games, reports installed compatibility tools, launches games with fixed argument arrays, and creates explicit restic backups.</p>
+    <p>All operations run as the signed-in user. System packages, drivers, and compatibility foundations remain managed by their dedicated Linxira tools.</p>
+  </description>
+  <url type="homepage">https://github.com/Linxira-OS/linxira-gaming-manager</url>
+  <developer id="org.linxira">
+    <name>Linxira OS</name>
+  </developer>
+  <content_rating type="oars-1.1" />
 </component>
