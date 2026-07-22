@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -25,8 +27,11 @@ from PySide6.QtWidgets import (
 
 from .backup import backup_command
 from .discovery import discover_steam
-from .launch import launch_command, tool_status
-from .paths import state_path, steam_roots
+from .launch import launch_spec, tool_status
+from .paths import (
+    data_home, ensure_private_directory, game_log_path, game_prefix_path,
+    state_home, state_path, steam_roots,
+)
 from .setup import SetupTransaction, apply_setup, discard_setup, plan_setup
 from .store import Store
 
@@ -46,8 +51,8 @@ class SetupApplyThread(QThread):
     succeeded = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, transaction):
-        super().__init__()
+    def __init__(self, transaction, parent=None):
+        super().__init__(parent)
         self.transaction = transaction
 
     def run(self):
@@ -64,6 +69,9 @@ class GamingWindow(QMainWindow):
         self.games = []
         self.setup_plan_worker = None
         self.setup_apply_worker = None
+        self.game_processes = {}
+        self.process_buffers = {}
+        self._backup_process = None
         self.setWindowTitle("Linxira Gaming Manager")
         self.setWindowIcon(QIcon.fromTheme("applications-games"))
         self.setMinimumSize(860, 560)
@@ -72,6 +80,18 @@ class GamingWindow(QMainWindow):
         self.refresh_library()
 
     def closeEvent(self, event):
+        workers = (self.setup_plan_worker, self.setup_apply_worker)
+        if (
+            self.game_processes
+            or self._backup_process is not None
+            or any(worker is not None and worker.isRunning() for worker in workers)
+        ):
+            event.ignore()
+            QMessageBox.information(
+                self, "Linxira Gaming Manager",
+                "Wait for running games and setup operations to finish before closing.",
+            )
+            return
         self.store.close()
         super().closeEvent(event)
 
@@ -96,14 +116,15 @@ class GamingWindow(QMainWindow):
     def _library_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.library = QTableWidget(0, 4)
-        self.library.setHorizontalHeaderLabels(["Game", "Source", "Install path", "Prefix"])
+        self.library = QTableWidget(0, 5)
+        self.library.setHorizontalHeaderLabels(["Game", "Source", "Runner", "Install path", "Prefix"])
         self.library.setSelectionBehavior(QTableWidget.SelectRows)
         self.library.setSelectionMode(QTableWidget.SingleSelection)
         self.library.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.library.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.library.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.library.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.library.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.library.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.library.verticalHeader().setVisible(False)
         layout.addWidget(self.library)
         row = QHBoxLayout()
@@ -186,16 +207,30 @@ class GamingWindow(QMainWindow):
         self.library.setRowCount(len(self.games))
         for row, game in enumerate(self.games):
             for column, value in enumerate((
-                game["name"], game["source"], game["install_path"], game.get("prefix_path") or "-"
+                game["name"], game["source"], game.get("runner") or "auto",
+                game["install_path"], game.get("prefix_path") or "-"
             )):
                 self.library.setItem(row, column, QTableWidgetItem(value))
         self.refresh_activity()
 
     def import_game(self):
-        executable = QFileDialog.getOpenFileName(self, "Select game executable")[0]
+        executable = QFileDialog.getOpenFileName(
+            self, "Select Windows game executable", filter="Windows executables (*.exe)"
+        )[0]
         if not executable:
             return
-        self.store.add_imported(Path(executable).stem, executable)
+        labels = ["UMU-Proton (recommended)", "System Wine"]
+        selected, accepted = QInputDialog.getItem(
+            self, "Compatibility runner", "Runner", labels, 0, False
+        )
+        if not accepted:
+            return
+        runner = "umu" if selected == labels[0] else "wine"
+        try:
+            self.store.add_imported(Path(executable).stem, executable, runner)
+        except ValueError as error:
+            QMessageBox.warning(self, "Import game", str(error))
+            return
         self.store.record("import", executable, "succeeded")
         self.refresh_library()
 
@@ -207,14 +242,106 @@ class GamingWindow(QMainWindow):
         game = self.selected_game()
         if not game:
             return
+        if game["id"] in self.game_processes:
+            QMessageBox.information(self, "Linxira Gaming Manager", "This game is already running.")
+            return
         try:
-            executable, arguments = launch_command(game)
+            if game["source"] == "imported":
+                prefix = game_prefix_path(game["id"])
+                ensure_private_directory(
+                    prefix, data_home() / "linxira/gaming-manager", data_home()
+                )
+            spec = launch_spec(game)
         except (FileNotFoundError, ValueError) as error:
             QMessageBox.warning(self, "Linxira Gaming Manager", str(error))
             return
-        started = QProcess.startDetached(executable, arguments)
-        self.store.record("launch", game["name"], "succeeded" if started else "failed")
+        process = QProcess(self)
+        environment = QProcessEnvironment()
+        for key, value in spec.environment.items():
+            environment.insert(key, value)
+        process.setProcessEnvironment(environment)
+        process.setWorkingDirectory(spec.working_directory)
+        process.setProgram(spec.program)
+        process.setArguments(list(spec.arguments))
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        game_id = game["id"]
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        log_path = game_log_path(game_id, timestamp)
+        self.process_buffers[game_id] = bytearray()
+        process.readyReadStandardOutput.connect(lambda game_id=game_id: self._capture_game_output(game_id))
+        process.finished.connect(
+            lambda code, status, game_id=game_id, name=game["name"], path=log_path:
+            self._game_finished(game_id, name, path, code, status)
+        )
+        process.errorOccurred.connect(
+            lambda error, game_id=game_id, name=game["name"], path=log_path:
+            self._game_process_error(game_id, name, path, error)
+        )
+        self.game_processes[game_id] = process
+        process.start()
+        self.store.record("launch", game["name"], "running", f"runner={game.get('runner', 'steam')}")
         self.refresh_activity()
+
+    def _capture_game_output(self, game_id):
+        process = self.game_processes.get(game_id)
+        if process is None:
+            return
+        output = bytes(process.readAllStandardOutput())
+        buffer = self.process_buffers[game_id]
+        remaining = 1024 * 1024 - len(buffer)
+        if remaining > 0:
+            buffer.extend(output[:remaining])
+
+    def _write_game_log(self, log_path, output):
+        ensure_private_directory(
+            log_path.parent, state_home() / "linxira/gaming-manager", state_home()
+        )
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(log_path, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as stream:
+                stream.write(output)
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            os.close(descriptor)
+
+    def _game_finished(self, game_id, name, log_path, exit_code, exit_status):
+        if game_id not in self.game_processes:
+            return
+        self._capture_game_output(game_id)
+        output = bytes(self.process_buffers.pop(game_id, b""))
+        process = self.game_processes.pop(game_id)
+        process.deleteLater()
+        try:
+            self._write_game_log(log_path, output)
+            log_detail = f"log={log_path}"
+        except (OSError, ValueError) as error:
+            log_detail = f"log-error={error}"
+        normal = exit_status == QProcess.ExitStatus.NormalExit
+        status = "succeeded" if normal and exit_code == 0 else "failed"
+        self.store.record("launch", name, status, f"exit={exit_code}; {log_detail}")
+        self.refresh_activity()
+
+    def _game_process_error(self, game_id, name, log_path, error):
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        process = self.game_processes.get(game_id)
+        if process is None:
+            return
+        message = process.errorString()
+        output = bytes(self.process_buffers.pop(game_id, b""))
+        self.game_processes.pop(game_id, None)
+        process.deleteLater()
+        try:
+            self._write_game_log(log_path, output)
+            detail = f"{message}; log={log_path}"
+        except (OSError, ValueError) as log_error:
+            detail = f"{message}; log-error={log_error}"
+        self.store.record("launch", name, "failed", detail)
+        self.refresh_activity()
+        QMessageBox.warning(self, "Game launch failed", message)
 
     def refresh_tools(self):
         tools = tool_status()
@@ -227,7 +354,7 @@ class GamingWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Deploy gaming environment",
-            "This setup installs the official Arch Steam package, Wine, GameMode, "
+            "This setup installs the official Arch Steam package, UMU-Proton, Wine, GameMode, "
             "MangoHud, Gamescope, Protontricks, VKD3D and Intel/AMD open Vulkan runtimes.\n\n"
             "Steam is proprietary. Continuing records your explicit acceptance to install Steam "
             "under Valve's Steam Subscriber Agreement. Steam may present additional terms at first start.",
@@ -241,6 +368,7 @@ class GamingWindow(QMainWindow):
         self.setup_plan_worker = SetupPlanThread(self)
         self.setup_plan_worker.succeeded.connect(self._gaming_plan_ready)
         self.setup_plan_worker.failed.connect(self._gaming_setup_failed)
+        self.setup_plan_worker.finished.connect(self._setup_plan_finished)
         self.setup_plan_worker.start()
 
     def _gaming_plan_ready(self, transaction: SetupTransaction):
@@ -259,9 +387,10 @@ class GamingWindow(QMainWindow):
             self.setup_status.setText("Gaming setup cancelled")
             return
         self.setup_status.setText("Installing the confirmed gaming environment")
-        self.setup_apply_worker = SetupApplyThread(transaction)
+        self.setup_apply_worker = SetupApplyThread(transaction, self)
         self.setup_apply_worker.succeeded.connect(self._gaming_setup_finished)
         self.setup_apply_worker.failed.connect(self._gaming_setup_failed)
+        self.setup_apply_worker.finished.connect(self._setup_apply_finished)
         self.setup_apply_worker.start()
 
     def _gaming_setup_finished(self, output):
@@ -279,7 +408,18 @@ class GamingWindow(QMainWindow):
         self.refresh_activity()
         QMessageBox.warning(self, "Gaming setup", message)
 
+    def _setup_plan_finished(self):
+        self.setup_plan_worker.deleteLater()
+        self.setup_plan_worker = None
+
+    def _setup_apply_finished(self):
+        self.setup_apply_worker.deleteLater()
+        self.setup_apply_worker = None
+
     def create_backup(self):
+        if self._backup_process is not None:
+            QMessageBox.information(self, "Linxira Gaming Manager", "A backup is already running.")
+            return
         try:
             executable, arguments, extra_environment = backup_command(
                 self.backup_repository.text(),
@@ -294,17 +434,37 @@ class GamingWindow(QMainWindow):
         for key, value in extra_environment.items():
             environment.insert(key, value)
         process.setProcessEnvironment(environment)
-        process.finished.connect(lambda code, status: self._backup_finished(code))
+        subject = self.backup_source.text()
+        process.finished.connect(lambda code, status: self._backup_finished(code, subject))
+        process.errorOccurred.connect(
+            lambda error: self._backup_error(error, subject)
+        )
         process.start(executable, arguments)
         self.backup_status.setText("Backup running")
         self._backup_process = process
 
-    def _backup_finished(self, exit_code):
+    def _backup_finished(self, exit_code, subject):
+        if self._backup_process is None:
+            return
+        process = self._backup_process
+        self._backup_process = None
+        process.deleteLater()
         status = "succeeded" if exit_code == 0 else "failed"
-        subject = self.backup_source.text()
         self.backup_status.setText(f"Backup {status}")
         self.store.record("backup", subject, status)
         self.refresh_activity()
+
+    def _backup_error(self, error, subject):
+        if error != QProcess.ProcessError.FailedToStart or self._backup_process is None:
+            return
+        process = self._backup_process
+        self._backup_process = None
+        message = process.errorString()
+        process.deleteLater()
+        self.backup_status.setText("Backup failed")
+        self.store.record("backup", subject, "failed", message)
+        self.refresh_activity()
+        QMessageBox.warning(self, "Backup failed", message)
 
     def refresh_activity(self):
         rows = self.store.activity()

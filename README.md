@@ -11,6 +11,10 @@ Catalog. It shows the resulting immutable package plan and uses the same fixed
 `linxira-components` confirmation/apply boundary as the other Linxira software
 managers. It never invokes a package manager or shell directly.
 
+Imported games use stable IDs, per-game managed prefixes, an environment
+allowlist, and a fixed UMU or Wine runner. Only `.exe` payloads are accepted;
+launch status and logs remain visible until the process exits.
+
 State is stored in
 `${XDG_DATA_HOME:-$HOME/.local/share}/linxira/gaming-manager/state.db`.
 Backups use an existing restic repository and password file selected by the
