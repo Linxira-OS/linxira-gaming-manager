@@ -21,6 +21,7 @@ def launch_command(game):
 
 def tool_status():
     return {
+        "Steam": shutil.which("steam"),
         "UMU Launcher": shutil.which("umu-run"),
         "Wine": shutil.which("wine"),
         "Protontricks": shutil.which("protontricks"),
@@ -28,4 +29,5 @@ def tool_status():
         "restic": shutil.which("restic"),
         "GameMode": shutil.which("gamemoderun"),
         "Gamescope": shutil.which("gamescope"),
+        "MangoHud": shutil.which("mangohud"),
     }

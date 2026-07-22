@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt
+from PySide6.QtCore import QProcess, QProcessEnvironment, QThread, Qt, Signal
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,7 +27,34 @@ from .backup import backup_command
 from .discovery import discover_steam
 from .launch import launch_command, tool_status
 from .paths import state_path, steam_roots
+from .setup import SetupTransaction, apply_setup, discard_setup, plan_setup
 from .store import Store
+
+
+class SetupPlanThread(QThread):
+    succeeded = Signal(object)
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            self.succeeded.emit(plan_setup())
+        except Exception as error:
+            self.failed.emit(str(error))
+
+
+class SetupApplyThread(QThread):
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, transaction):
+        super().__init__()
+        self.transaction = transaction
+
+    def run(self):
+        try:
+            self.succeeded.emit(apply_setup(self.transaction))
+        except Exception as error:
+            self.failed.emit(str(error))
 
 
 class GamingWindow(QMainWindow):
@@ -35,6 +62,8 @@ class GamingWindow(QMainWindow):
         super().__init__()
         self.store = Store(state_path())
         self.games = []
+        self.setup_plan_worker = None
+        self.setup_apply_worker = None
         self.setWindowTitle("Linxira Gaming Manager")
         self.setWindowIcon(QIcon.fromTheme("applications-games"))
         self.setMinimumSize(860, 560)
@@ -94,9 +123,14 @@ class GamingWindow(QMainWindow):
         self.tools.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.tools.verticalHeader().setVisible(False)
         layout.addWidget(self.tools)
-        note = QLabel("Install launchers in Package Center and compatibility foundations in Component Manager.")
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        controls = QHBoxLayout()
+        self.setup_status = QLabel("Gaming setup has not been checked")
+        self.setup_status.setWordWrap(True)
+        self.setup_button = QPushButton(QIcon.fromTheme("applications-games"), "Deploy gaming environment")
+        self.setup_button.clicked.connect(self.plan_gaming_setup)
+        controls.addWidget(self.setup_status, 1)
+        controls.addWidget(self.setup_button)
+        layout.addLayout(controls)
         self.refresh_tools()
         return page
 
@@ -188,6 +222,62 @@ class GamingWindow(QMainWindow):
         for row, (name, path) in enumerate(tools.items()):
             self.tools.setItem(row, 0, QTableWidgetItem(name))
             self.tools.setItem(row, 1, QTableWidgetItem(path or "Not installed"))
+
+    def plan_gaming_setup(self):
+        answer = QMessageBox.question(
+            self,
+            "Deploy gaming environment",
+            "This setup installs the official Arch Steam package, Wine, GameMode, "
+            "MangoHud, Gamescope, Protontricks, VKD3D and Intel/AMD open Vulkan runtimes.\n\n"
+            "Steam is proprietary. Continuing records your explicit acceptance to install Steam "
+            "under Valve's Steam Subscriber Agreement. Steam may present additional terms at first start.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.setup_button.setEnabled(False)
+        self.setup_status.setText("Creating an immutable gaming setup plan")
+        self.setup_plan_worker = SetupPlanThread(self)
+        self.setup_plan_worker.succeeded.connect(self._gaming_plan_ready)
+        self.setup_plan_worker.failed.connect(self._gaming_setup_failed)
+        self.setup_plan_worker.start()
+
+    def _gaming_plan_ready(self, transaction: SetupTransaction):
+        targets = transaction.plan["directPackageTargets"]
+        answer = QMessageBox.question(
+            self,
+            "Confirm gaming setup plan",
+            "Administrator authorization will install these fixed package targets:\n\n"
+            + "\n".join(targets),
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Ok:
+            discard_setup(transaction)
+            self.setup_button.setEnabled(True)
+            self.setup_status.setText("Gaming setup cancelled")
+            return
+        self.setup_status.setText("Installing the confirmed gaming environment")
+        self.setup_apply_worker = SetupApplyThread(transaction)
+        self.setup_apply_worker.succeeded.connect(self._gaming_setup_finished)
+        self.setup_apply_worker.failed.connect(self._gaming_setup_failed)
+        self.setup_apply_worker.start()
+
+    def _gaming_setup_finished(self, output):
+        self.setup_button.setEnabled(True)
+        self.setup_status.setText("Gaming environment installed")
+        self.store.record("setup", "gaming environment", "succeeded")
+        self.refresh_tools()
+        self.refresh_activity()
+        QMessageBox.information(self, "Gaming setup", output or "Gaming environment installed.")
+
+    def _gaming_setup_failed(self, message):
+        self.setup_button.setEnabled(True)
+        self.setup_status.setText("Gaming setup failed")
+        self.store.record("setup", "gaming environment", "failed")
+        self.refresh_activity()
+        QMessageBox.warning(self, "Gaming setup", message)
 
     def create_backup(self):
         try:

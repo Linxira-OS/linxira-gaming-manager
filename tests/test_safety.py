@@ -37,3 +37,11 @@ class SafetyTests(unittest.TestCase):
         )
         for forbidden in ("pkexec", "sudo", "pacman", "flatpak", "shell=True"):
             self.assertNotIn(forbidden, source)
+
+    def test_setup_backend_has_no_package_manager_or_shell(self):
+        source = (Path(__file__).parents[1] / "src/linxira_gaming_manager/setup.py").read_text(
+            encoding="utf-8"
+        )
+        for forbidden in ("sudo", "pacman", "flatpak", "shell=True"):
+            self.assertNotIn(forbidden, source)
+        self.assertIn('"--confirmation"', source)
