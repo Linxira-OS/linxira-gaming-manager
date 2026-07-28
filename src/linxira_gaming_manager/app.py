@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .backup import backup_command
+from .about import show_about
 from .discovery import discover_steam
 from .launch import launch_spec, tool_status
 from .paths import (
@@ -105,6 +106,10 @@ class GamingWindow(QMainWindow):
         toolbar.addAction(refresh)
         toolbar.addAction(add)
         self.addToolBar(toolbar)
+
+        about = QAction("About Linxira Gaming Manager", self)
+        about.triggered.connect(lambda: show_about(self))
+        self.menuBar().addMenu("Help").addAction(about)
 
         tabs = QTabWidget()
         tabs.addTab(self._library_tab(), QIcon.fromTheme("applications-games"), "Library")
@@ -398,6 +403,7 @@ class GamingWindow(QMainWindow):
         self.setup_status.setText("Gaming environment installed")
         self.store.record("setup", "gaming environment", "succeeded")
         self.refresh_tools()
+        self.refresh_library()
         self.refresh_activity()
         QMessageBox.information(self, "Gaming setup", output or "Gaming environment installed.")
 

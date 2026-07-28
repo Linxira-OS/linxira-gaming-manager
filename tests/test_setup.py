@@ -11,6 +11,7 @@ from linxira_gaming_manager.setup import (
     discard_setup,
     plan_setup,
 )
+from linxira_gaming_manager.app import GamingWindow
 
 
 class GamingSetupTests(unittest.TestCase):
@@ -60,6 +61,14 @@ class GamingSetupTests(unittest.TestCase):
         ])
         self.assertEqual(commands[-1][3], "--confirmation")
         self.assertNotIn("--catalog", commands[-1])
+
+    def test_successful_setup_refreshes_tool_and_library_state(self):
+        window = mock.Mock()
+        with mock.patch("linxira_gaming_manager.app.QMessageBox.information"):
+            GamingWindow._gaming_setup_finished(window, "applied")
+        window.refresh_tools.assert_called_once_with()
+        window.refresh_library.assert_called_once_with()
+        window.refresh_activity.assert_called_once_with()
 
 
 if __name__ == "__main__":

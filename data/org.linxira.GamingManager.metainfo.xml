@@ -10,9 +10,15 @@
     <p>Linxira Gaming Manager deploys a reviewed Steam and compatibility environment through an immutable package plan, discovers Steam libraries and imported games, reports installed tools, launches games with fixed argument arrays, and creates explicit restic backups.</p>
     <p>Library, launch, and backup operations run as the signed-in user. Gaming setup requests administrator authorization only for the fixed catalog-bound Linxira Components transaction.</p>
   </description>
-  <url type="homepage">https://github.com/Linxira-OS/linxira-gaming-manager</url>
+  <url type="homepage">https://linxira-os.github.io/</url>
+  <url type="vcs-browser">https://github.com/Linxira-OS/linxira-gaming-manager</url>
+  <url type="bugtracker">https://github.com/Linxira-OS/linxira-gaming-manager/issues</url>
+  <url type="help">https://linxira-os.github.io/linxira-wiki/</url>
   <developer id="org.linxira">
     <name>Linxira OS</name>
   </developer>
+  <releases>
+    <release version="0.3.0" date="2026-07-26" />
+  </releases>
   <content_rating type="oars-1.1" />
 </component>

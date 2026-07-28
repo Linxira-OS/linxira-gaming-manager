@@ -9,6 +9,13 @@ description = "Game library, compatibility setup, launch, and backup manager for
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = ["PySide6", "vdf"]
+authors = [{name = "Linxira OS contributors"}]
+
+[project.urls]
+Homepage = "https://linxira-os.github.io/"
+Repository = "https://github.com/Linxira-OS/linxira-gaming-manager"
+Issues = "https://github.com/Linxira-OS/linxira-gaming-manager/issues"
+Documentation = "https://linxira-os.github.io/linxira-wiki/"
 
 [project.scripts]
 linxira-gaming-manager = "linxira_gaming_manager.app:main"
