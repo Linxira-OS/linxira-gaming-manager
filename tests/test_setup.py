@@ -11,7 +11,12 @@ from linxira_gaming_manager.setup import (
     discard_setup,
     plan_setup,
 )
-from linxira_gaming_manager.app import GamingWindow
+try:
+    from linxira_gaming_manager.app import GamingWindow
+    _PYSIDE_AVAILABLE = True
+except ImportError:  # PySide6 not installed (headless CI)
+    GamingWindow = None
+    _PYSIDE_AVAILABLE = False
 
 
 class GamingSetupTests(unittest.TestCase):
@@ -63,6 +68,8 @@ class GamingSetupTests(unittest.TestCase):
         self.assertNotIn("--catalog", commands[-1])
 
     def test_successful_setup_refreshes_tool_and_library_state(self):
+        if not _PYSIDE_AVAILABLE:
+            self.skipTest("PySide6 not installed")
         window = mock.Mock()
         with mock.patch("linxira_gaming_manager.app.QMessageBox.information"):
             GamingWindow._gaming_setup_finished(window, "applied")
